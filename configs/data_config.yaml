@@ -1,0 +1,23 @@
+# Task 1 data configuration
+# Source pool: HotpotQA dev split (7,405 questions, distractor setting)
+# Rationale: HotpotQA's official test set has no public labels, so we build
+# our own fixed dev/test split from the labeled dev pool.
+
+dataset:
+  source: hotpotqa/hotpot_qa
+  config: distractor
+  source_split: dev          # pulled from data/raw/dev.jsonl
+  total_source_questions: 7405
+
+project_split:
+  seed: 42
+  use_full_pool: true        # using all 7,405 questions, no subsampling
+  dev_ratio: 0.8
+  test_ratio: 0.2
+  expected_dev_count: 5924
+  expected_test_count: 1481
+
+output:
+  splits_dir: data/processed/splits
+  dev_ids_file: dev_ids.jsonl
+  test_ids_file: test_ids.jsonl
