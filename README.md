@@ -144,3 +144,76 @@ HotpotQA questions are multi-hop and name several entity types at once, so
 pattern even though the answer is a job title. Roughly 38% of questions still
 landed in an untyped pool, and mislabelled cases contaminated the pools they
 were sampled from.
+
+**Type answers with named-entity recognition.** spaCy NER was run on the gold
+passage to type each answer in context, and replacements were drawn from pools
+of entities with the same label. The typing was correct, but the pools held
+fragments such as "Dean of Accounting of Universiti", producing text like
+"UROVESA is best known for the production of the Dissection".
+
+Separately, prepending a question-aligned header to lift retrieval rank made
+passages read as obviously synthetic, which a verifier could reject on form
+rather than on facts.
+
+The conclusion was that coherent adversarial text needs generation, not token
+substitution.
+
+### Contradiction (LLM-generated)
+
+Contradiction poisoning is therefore generated with a language model. The
+script is `src/data/attacks/contradiction_llm.py`.
+
+For each eligible question, every gold passage that states the answer is
+rewritten so that it states one false answer instead. Each passage gets three
+differently worded versions carrying the same false answer. The model is never
+shown the question, only the passages and the value to replace, so it cannot
+produce a question-aligned header. All other design rules are unchanged: gold
+passages stay in the corpus, poisoned passages keep their source title and are
+unmarked, and provenance is written to a separate file.
+
+**Eligibility.** Of the 5,924 dev-split questions, 3,547 (59.9%) are eligible.
+The rest are skipped before any generation: 1,994 because the answer is the
+title of a gold passage, which would leave the true answer in the title of its
+own contradiction; 367 yes/no answers; 11 single-character answers; and 5 whose
+answer does not appear verbatim in a gold passage.
+
+**Validation.** A question is accepted only if every version of every target
+passage passes every check; otherwise it is rejected and logged with reasons,
+with no fallback. The checks require that the true answer and its distinctive
+parts are absent, the false answer is present, every other number and name in
+the source is preserved, no new numbers are introduced, the passage still names
+its subject, the text is a single plain paragraph of similar length, and no two
+versions are near copies of each other.
+
+**Current status: partial.** 65 dev questions have been attempted, 33 accepted
+and 32 rejected, giving 108 poisoned passages. Three accepted questions have
+both gold passages poisoned. The set is small because generation runs on the
+Groq free tier (`openai/gpt-oss-20b`), which allows 200,000 tokens per day,
+roughly 100 attempts. The run is checkpointed and seeded, so repeating the same
+command continues from where it stopped and never repeats a question.
+
+**Known limitations.**
+
+- Retrieval and attack success have not been measured yet. Whether these
+  passages reach top-k and mislead a generator is untested.
+- In a manual reading of 11 accepted questions, 9 were clean and 2 had a minor
+  inconsistency the checks cannot detect, such as a changed death year that no
+  longer matches the stated age.
+- For 660 of the 3,547 eligible questions, a distractor passage in the same
+  bundle also states the true answer and is not rewritten. The count is
+  recorded per question in the provenance file.
+- Answers are matched by exact wording, so the same entity under another name
+  in a different passage is not detected.
+- Every mention of the answer in a target passage is replaced, including
+  mentions unrelated to the question.
+- Only the dev split has been generated. The test split is reserved until the
+  prompt is frozen.
+
+**Running it.**
+
+```
+export GROQ_API_KEY=...
+python src/data/attacks/contradiction_llm.py --dry_run
+python src/data/attacks/contradiction_llm.py --limit 65 --out_dir data/processed/poisoned_corpus/contradiction_llm_v1
+python src/data/build_poisoned_corpus.py --poison_path data/processed/poisoned_corpus/contradiction_llm_v1/poisoned_passages.jsonl --out_dir data/processed/poisoned_corpus/contradiction_llm_v1 --variant_name contradiction_llm_v1
+```

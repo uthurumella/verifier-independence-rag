@@ -1,0 +1,34 @@
+{
+  "attack_type": "contradiction_llm",
+  "model": "openai/gpt-oss-20b",
+  "prompt_version": "2ba80bc687",
+  "split": "dev",
+  "seed": 42,
+  "copies_per_passage": 3,
+  "max_attempts": 2,
+  "max_pair_similarity": 0.8,
+  "questions_accepted": 33,
+  "questions_rejected": 32,
+  "accepted_with_multiple_targets": 3,
+  "accepted_with_residual_nongold_leak": 4,
+  "poisoned_passages": 108,
+  "skipped_ineligible": {
+    "answer_in_gold_title": 35,
+    "answer_is_yes_no": 7
+  },
+  "rejection_reason_counts": {
+    "near_duplicate": 33,
+    "name_missing": 17,
+    "true_answer_present": 9,
+    "subject_dropped": 8,
+    "expected_3_versions_got": 4,
+    "json_validate_failed": 3,
+    "false_answer_absent": 3,
+    "number_missing": 2,
+    "replacement_already_in_source": 1,
+    "true_answer_fragment_present": 1,
+    "replacement_overlaps_answer": 1,
+    "passage_missing": 1
+  },
+  "stopped_early": null
+}
