@@ -1,0 +1,52 @@
+{
+  "attack_type": "paraphrase_llm",
+  "model": "openai/gpt-oss-120b",
+  "prompt_version": "8547a126ef",
+  "split": "dev",
+  "seed": 42,
+  "copies_per_passage": 3,
+  "max_attempts": 3,
+  "max_pair_similarity": 0.8,
+  "questions_accepted": 33,
+  "questions_rejected": 12,
+  "accepted_with_multiple_targets": 2,
+  "accepted_with_residual_nongold_leak": 4,
+  "poisoned_passages": 105,
+  "skipped_ineligible": {
+    "answer_in_gold_title": 21,
+    "answer_is_yes_no": 5
+  },
+  "rejection_reason_counts": {
+    "name_missing": 19,
+    "too_close_to_source": 3,
+    "number_missing": 2,
+    "length_ratio": 2,
+    "expected_3_versions_got": 1,
+    "false_answer_absent": 1,
+    "true_answer_present": 1,
+    "replacement_already_in_source": 1,
+    "number_added": 1,
+    "replacement_overlaps_answer": 1,
+    "subject_dropped": 1
+  },
+  "stopped_early": "rate limited, retry-after 132s",
+  "max_source_similarity": 0.75,
+  "base_script": "contradiction_llm.py",
+  "output_normalization": "special hyphens, curly quotes, odd spaces -> plain, unless used by the source",
+  "manual_exclusions": [
+    {
+      "question_id": "5a8b20335542996c9b8d5fb3",
+      "reason": "false answer contradicts a fact kept in the passage (tallest player, 5 ft)"
+    },
+    {
+      "question_id": "5a72f3a85542992359bc31e5",
+      "reason": "true answer survives in singular form (Ribosome)"
+    },
+    {
+      "question_id": "5a834ed95542990548d0b1ca",
+      "reason": "comparison question; false answer is not one of the two options"
+    }
+  ],
+  "questions_final": 30,
+  "poisoned_passages_final": 96
+}

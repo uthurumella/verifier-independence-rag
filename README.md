@@ -217,3 +217,47 @@ python src/data/attacks/contradiction_llm.py --dry_run
 python src/data/attacks/contradiction_llm.py --limit 65 --out_dir data/processed/poisoned_corpus/contradiction_llm_v1
 python src/data/build_poisoned_corpus.py --poison_path data/processed/poisoned_corpus/contradiction_llm_v1/poisoned_passages.jsonl --out_dir data/processed/poisoned_corpus/contradiction_llm_v1 --variant_name contradiction_llm_v1
 ```
+
+### Paraphrased misinformation (LLM-generated)
+
+The third attack states one false answer in three passages, none of which
+stays close to the wording of the gold passage. The script is
+`src/data/attacks/paraphrase_llm.py`.
+
+**How it differs from contradiction.** In the contradiction attack, the first
+version of each passage is the source with only the value changed. Here every
+version must be a full rewrite. A version whose word-sequence similarity to
+its source is above 0.75 is rejected. A source with only the value changed
+scores about 0.97, so the rule separates the two attacks cleanly. This attack
+tests whether several differently worded passages carrying one false claim are
+treated as independent corroboration.
+
+**Implementation.** The script imports `contradiction_llm.py` and reuses its
+eligibility rules, client, checkpointing, validation, and export. It adds the
+similarity check, a prompt that requires full rewrites, a per-passage list of
+the names and numbers the validator will look for, and a step that converts
+special hyphens and curly quotes in the model output to plain ones. The model
+is still never shown the question. All design rules are unchanged: gold
+passages stay in the corpus, poisoned passages keep their source title and are
+unmarked, and provenance is written to a separate file.
+
+**Current status: partial.** 45 dev questions were attempted with
+`openai/gpt-oss-120b` on the Groq free tier, with up to three attempts per
+question. 33 were accepted and 12 rejected. All 33 accepted questions were
+then read against their gold passages, and 3 were removed because the poison
+could not work: one contradicted a fact kept in the same passage, one left the
+true answer in the passage in singular form, and one gave a false answer that
+was not among the options of a comparison question. The released set is 30
+questions and 96 passages; two questions have both gold passages poisoned. The
+exclusions and their reasons are recorded in `run_manifest.json`.
+
+An earlier prompt revision was tested on 10 questions and discarded because
+its false answers were often of the wrong category. Its output is not part of
+this set.
+
+**Running it.**
+
+    export GROQ_API_KEY=...
+    python src/data/attacks/paraphrase_llm.py --dry_run
+    python src/data/attacks/paraphrase_llm.py --limit 45 --model openai/gpt-oss-120b --max_attempts 3
+    python src/data/build_poisoned_corpus.py --poison_path data/processed/poisoned_corpus/paraphrase_llm_v1/poisoned_passages.jsonl --out_dir data/processed/poisoned_corpus/paraphrase_llm_v1 --variant_name paraphrase_llm_v1
