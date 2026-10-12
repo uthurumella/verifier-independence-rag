@@ -1,0 +1,80 @@
+{
+  "attack_type": "relevant_llm",
+  "base_script": "contradiction_llm.py",
+  "scripts": [
+    "src/data/attacks/relevant_llm.py (revision 3)",
+    "src/data/attacks/relevant_llm_r4.py (revision 4)"
+  ],
+  "split": "dev",
+  "question_order_seed": 42,
+  "copies_per_passage": 3,
+  "max_attempts": 3,
+  "sources": [
+    {
+      "folder": "relevant_llm_v1_prompt3",
+      "prompt_version": "a4aa196535",
+      "questions_used": 17,
+      "note": "first 40 eligible questions; questions flagged by the revision 4 audit or by manual review were re-generated"
+    },
+    {
+      "folder": "relevant_llm_v1_prompt4",
+      "prompt_version": "35e0541f16",
+      "questions_used": 6,
+      "note": "re-generation of the 10 flagged questions"
+    },
+    {
+      "folder": "relevant_llm_v1_prompt5",
+      "prompt_version": "b0a1af93cf",
+      "questions_used": 1,
+      "note": "second re-generation (--derived_forms, API seed 7) of the 4 still rejected"
+    },
+    {
+      "folder": "relevant_llm_v1_extra",
+      "prompt_version": "b0a1af93cf",
+      "questions_used": 9,
+      "note": "next eligible questions in the same seeded order"
+    }
+  ],
+  "models": {
+    "openai/gpt-oss-120b": 18,
+    "openai/gpt-oss-20b": 15
+  },
+  "prompt_versions": {
+    "a4aa196535": 17,
+    "35e0541f16": 6,
+    "b0a1af93cf": 10
+  },
+  "manual_exclusions": [
+    {
+      "question_id": "5ae1599155429901ffe4ae7b",
+      "reason": "Forst/Robbins: false answer written as a raw list, and the passages state the true occupations"
+    },
+    {
+      "question_id": "5a835a265542992ef85e2281",
+      "reason": "Selwyn/Akerman: passages call Akerman a film director, which reveals the true answer"
+    },
+    {
+      "question_id": "5ab3cc395542992ade7c6e9f",
+      "reason": "Party of Syrian Unity: false claim attributed to the party, not to the public statement the question asks about"
+    },
+    {
+      "question_id": "5ab67bf255429954757d32f5",
+      "reason": "PISCES: false answer places Reston in Maryland (it is in Virginia)"
+    },
+    {
+      "question_id": "5adf1c3f5542993a75d263ec",
+      "reason": "Celtic territories: implausible false list (Alsace, Catalonia), passages also mention the six Celtic nations"
+    }
+  ],
+  "flagged_and_not_recovered": [
+    {
+      "question_id": "5aba749055429901930fa7d8",
+      "reason": "revision 3 poison flagged; re-generation rejected by the checks"
+    }
+  ],
+  "accepted_with_multiple_targets": 0,
+  "accepted_with_residual_nongold_leak": 2,
+  "questions_final": 33,
+  "poisoned_passages_final": 99,
+  "output_normalization": "special hyphens, curly quotes, odd spaces -> plain"
+}

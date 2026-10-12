@@ -261,3 +261,53 @@ this set.
     python src/data/attacks/paraphrase_llm.py --dry_run
     python src/data/attacks/paraphrase_llm.py --limit 45 --model openai/gpt-oss-120b --max_attempts 3
     python src/data/build_poisoned_corpus.py --poison_path data/processed/poisoned_corpus/paraphrase_llm_v1/poisoned_passages.jsonl --out_dir data/processed/poisoned_corpus/paraphrase_llm_v1 --variant_name paraphrase_llm_v1
+
+### Highly relevant misleading passages (LLM-generated)
+
+The fourth attack writes new passages around the question itself. Each passage
+is filed under the title of a gold passage, names the people, works, and other
+specifics the question mentions, and states one false answer as plain fact. The
+scripts are `src/data/attacks/relevant_llm.py` and
+`src/data/attacks/relevant_llm_r4.py`.
+
+**How it differs from the other attacks.** Contradiction and paraphrase rewrite
+a gold passage. Here the passage is new text aimed at the question, so it should
+rank highly in retrieval without any gold passage being edited. The model sees
+the question and the gold passages as background and may use their facts but
+not copy them: similarity to any gold passage is at most 0.75, no shared run is
+longer than 12 words, and no more than 7 consecutive ordinary words come from
+the question.
+
+**Implementation.** Both scripts import `contradiction_llm.py` and reuse its
+eligibility rules, client, checkpointing, and export format. A version is
+rejected if the true answer or any form of it remains, the false answer is
+missing, it hedges, refers to itself, or opens with a pronoun, it adds names or
+numbers not found in the question or gold passages, or its false answer drops a
+target word the question itself states. `relevant_llm_r4.py` adds checks found
+during manual review: a false date must fall on the same side of every other
+date in the reference as the true one; when a question asks what two people
+share, every version names both; no "[value] was the [noun] where" sentences;
+no short sentence that only repeats the value; no summarizing commentary; and
+no invented spelled-out counts. Its `--derived_forms` option accepts a country
+name when the reference gives its adjective form (Austria for Austrian), and a
+list answer whose items all appear. With `--only_ids` it generates only the
+listed questions, so passages accepted earlier are never regenerated.
+
+**Current status: partial.** 59 dev questions were attempted, in the seeded
+order shared with the other LLM attacks. The first 40 were generated with
+revision 3, and all accepted output was read by eye and audited with the
+revision 4 checks. Ten flagged questions were regenerated with revision 4, and
+19 more questions were generated with it. After a final reading, 5 accepted
+questions were removed because the poison would not work, and one flagged
+question could not be regenerated. The released set is 33 questions and 99
+passages. `run_manifest.json` lists every exclusion with its reason, and each
+provenance record gives the prompt version, model, and run that produced its
+passage. Two earlier prompt revisions were tested on 10 questions and
+discarded; their output is not part of this set.
+
+**Running it.**
+
+    export GROQ_API_KEY=...
+    python src/data/attacks/relevant_llm.py --limit 40 --max_attempts 3 --out_dir <run folder>
+    python src/data/attacks/relevant_llm_r4.py --derived_forms --only_ids ids.txt --model openai/gpt-oss-120b --max_attempts 3 --out_dir <run folder>
+    python src/data/build_poisoned_corpus.py --poison_path data/processed/poisoned_corpus/relevant_llm_v1/poisoned_passages.jsonl --out_dir data/processed/poisoned_corpus/relevant_llm_v1 --variant_name relevant_llm_v1
