@@ -11,7 +11,8 @@ data/processed/poisoned_corpus/contradiction_v1/
 data/processed/poisoned_corpus/contradiction_v2/
 src/data/attacks/contradiction.py
 
-# Retrieval indexes.
+# Retrieval indexes. Rebuilt by src/retrieval/build_indexes.py.
+data/indexes/
 *.faiss
 *.index
 *.bin

@@ -1,0 +1,61 @@
+# Task 1, steps 9-10: retrieval indexes and smoke test.
+#
+# Fields marked [locked] define what an index IS. The build script records them
+# in each index's meta.json and refuses to reuse or extend an index built with
+# different values. Changing a [locked] field means a full re-embed of every
+# corpus, so settle them once and leave them alone.
+#
+# Everything else (paths, variant list, batch size, k values) can change freely.
+
+paths:
+  clean_passages: data/processed/clean_corpus/passages.jsonl
+  question_map: data/processed/clean_corpus/question_passage_map.jsonl
+  poisoned_root: data/processed/poisoned_corpus
+  raw_dev: data/raw/dev.jsonl
+  splits_dir: data/processed/splits
+  index_root: data/indexes
+  results_root: results/smoke_test
+
+clean_variant: clean_v1
+
+# Poisoned corpora to index. Each name is a folder under poisoned_root holding
+# poisoned_passages.jsonl and provenance.jsonl. After full-scale poisoning,
+# either keep these names (changed passages are detected and re-embedded) or
+# add the new folder names here. No code changes are needed either way.
+variants:
+  - factual_v1
+  - contradiction_llm_v1
+  - paraphrase_llm_v1
+  - relevant_llm_v1
+
+# Text the retrievers see for each passage. [locked]
+passage_template: "{title}\n{text}"
+
+dense:
+  model_name: intfloat/e5-base-v2   # [locked]
+  # [locked] Leave null on the first build: the exact model commit is resolved
+  # then and written to the clean index's meta.json, and every later build
+  # reuses that commit automatically. Set it only to pin a commit by hand.
+  revision: null
+  query_prefix: "query: "            # [locked] required by E5
+  passage_prefix: "passage: "        # [locked] required by E5
+  max_seq_length: 512                # [locked]
+  normalize: true                    # [locked] cosine similarity via inner product
+  batch_size: 256                    # lower this if the GPU runs out of memory
+  fp16: true                         # used only on GPU
+
+bm25:
+  method: lucene                     # [locked]
+  k1: 1.5                            # [locked]
+  b: 0.75                            # [locked]
+  stopwords: en                      # [locked]
+  stemmer: english                   # [locked] PyStemmer language, or null
+
+smoke_test:
+  k: [1, 5, 10, 20]
+  # Heuristic flag only. An attack is marked "weak" for a retriever when
+  # poisoned passages reach the top verdict_k for fewer than this share of its
+  # questions.
+  verdict_k: 10
+  weak_threshold: 0.25
+  n_examples: 3

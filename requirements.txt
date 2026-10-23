@@ -1,3 +1,10 @@
 datasets
 pyyaml
 requests
+# Retrieval indexes (Task 1 steps 9-10)
+numpy
+faiss-cpu>=1.8
+bm25s>=0.2.14
+PyStemmer
+sentence-transformers>=3.0
+huggingface_hub
