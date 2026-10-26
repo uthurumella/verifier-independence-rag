@@ -1,0 +1,39 @@
+index_config: configs/index_config.yaml
+results_root: results/rag
+retrieval:
+  top_k: 5
+  report_k:
+  - 1
+  - 5
+  - 10
+  - 20
+generator:
+  model_name: Qwen/Qwen2.5-3B-Instruct
+  revision: null
+  dtype: float16
+  max_new_tokens: 32
+  do_sample: false
+  batch_size: 16
+  max_passage_words: 220
+prompt:
+  system: 'You answer questions using only the passages provided. Reply with the answer
+    only: a short phrase of a few words, a name, a number, or yes/no. Do not explain
+    and do not write a full sentence.'
+  user: 'Passages:
+
+    {passages}
+
+
+    Question: {question}
+
+    Answer:'
+  passage: '[{i}] {title}
+
+    {text}'
+questions:
+  attacked: all
+  clean_sample_size: 7405
+  clean_sample_split: all
+  seed: 42
+scoring:
+  correct_f1: 0.5
