@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import threading
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -109,7 +110,31 @@ _base_parse_and_validate = base.parse_and_validate
 _base_explain = base.explain
 _base_export = base.export
 _base_write_inspection = base.write_inspection
-_current = {}  # question and gold passages of the question in progress
+
+
+class _ThreadLocalState:
+    """Dict-like per-thread store. Lets several questions run at once (--workers > 1)
+    without one thread overwriting the question another thread is validating."""
+
+    def __init__(self):
+        self._local = threading.local()
+
+    def _d(self):
+        if not hasattr(self._local, "d"):
+            self._local.d = {}
+        return self._local.d
+
+    def __getitem__(self, key):
+        return self._d()[key]
+
+    def __setitem__(self, key, value):
+        self._d()[key] = value
+
+    def get(self, key, default=None):
+        return self._d().get(key, default)
+
+
+_current = _ThreadLocalState()  # question and gold passages of the question in progress (per thread)
 
 
 def stems(text):

@@ -18,11 +18,17 @@ The checkpoint file is append-only and is the source of truth. Re-running the
 same command resumes where the last run stopped. LLM output is not reproducible
 from a seed, so the checkpoint (which stores raw responses) is the record.
 
-Usage:
+Usage (Groq, as in the pilot):
     export GROQ_API_KEY=...
     python src/data/attacks/contradiction_llm.py --dry_run
     python src/data/attacks/contradiction_llm.py --limit 25 \
         --out_dir data/processed/poisoned_corpus/contradiction_llm_proto
+
+Usage (model served on our own GPU, no API key, no quota):
+    vllm serve openai/gpt-oss-20b --port 8000
+    python src/data/attacks/contradiction_llm.py --base_url http://localhost:8000/v1 \
+        --workers 32 --split all --limit 100000 \
+        --out_dir data/processed/poisoned_corpus/contradiction_llm_full_v1
 """
 
 import argparse
@@ -33,9 +39,11 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 import unicodedata
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 ATTACK_TYPE = "contradiction_llm"
@@ -451,6 +459,81 @@ class GroqClient:
             raise FatalApiError(f"HTTP {response.status_code}: {detail}")
 
 
+_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.S)
+
+
+class LocalClient:
+    """An OpenAI-compatible server running on our own GPU (vLLM, SGLang, ...).
+
+    No pacing, no request cap, no daily quota: the GPU is the only limit. Safe to call
+    from several threads. If the server stops answering, the run stops cleanly
+    (BudgetExhausted); everything finished is already in the checkpoint, so the same
+    command resumes.
+    """
+
+    def __init__(self, args):
+        import requests  # imported here so --dry_run works without it installed
+        self.http = requests
+        self.args = args
+        self.url = args.base_url.rstrip("/") + "/chat/completions"
+        self.headers = {"Authorization": f"Bearer {os.environ.get(args.api_key_env, 'EMPTY')}"}
+        self.requests_made = 0
+        self.rate_limited = 0
+        self._lock = threading.Lock()
+
+    def complete(self, user_prompt: str):
+        """Return (content, usage)."""
+        args = self.args
+        payload = {
+            "model": args.model,
+            "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                         {"role": "user", "content": user_prompt}],
+            "temperature": args.temperature,
+            "seed": args.seed,
+            "max_completion_tokens": args.max_completion_tokens,
+        }
+        if args.reasoning_effort != "off":
+            payload["reasoning_effort"] = args.reasoning_effort
+        if not args.no_json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        errors = 0
+        while True:
+            with self._lock:
+                self.requests_made += 1
+            try:
+                response = self.http.post(self.url, json=payload, headers=self.headers,
+                                          timeout=args.request_timeout)
+            except self.http.RequestException as error:
+                errors += 1
+                if errors > 4:
+                    raise BudgetExhausted(f"local server not reachable: {error}")
+                time.sleep(5 * errors)
+                continue
+
+            if response.status_code == 200:
+                body = response.json()
+                choice = body["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise MalformedGeneration("output_truncated")
+                content = choice["message"].get("content")
+                if not content:
+                    raise MalformedGeneration("empty_content")
+                if args.no_json_mode:
+                    fenced = _FENCE.match(content)
+                    content = fenced.group(1) if fenced else content
+                return content, body.get("usage", {})
+
+            if response.status_code == 429 or response.status_code >= 500:
+                errors += 1
+                if errors > 4:
+                    raise BudgetExhausted(f"local server failing repeatedly: HTTP {response.status_code}")
+                time.sleep(5 * errors)
+                continue
+
+            raise FatalApiError(f"HTTP {response.status_code}: {response.text[:500]}")
+
+
 # handling one question
 
 def explain(reason: str, targets: list[dict], args) -> str:
@@ -627,6 +710,7 @@ def export(records: list[dict], skipped: list[dict], out_dir: str, args, stopped
     manifest = {
         "attack_type": ATTACK_TYPE,
         "model": args.model,
+        "backend": args.base_url or "groq",
         "prompt_version": PROMPT_VERSION,
         "split": args.split,
         "seed": args.seed,
@@ -693,7 +777,19 @@ def main():
     parser.add_argument("--max_length_ratio", type=float, default=1.5)
     parser.add_argument("--model", default="openai/gpt-oss-20b")
     parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--reasoning_effort", default="low", choices=["low", "medium", "high"])
+    parser.add_argument("--reasoning_effort", default="low", choices=["low", "medium", "high", "off"],
+                        help="'off' leaves the field out of the request (local server that rejects it).")
+    parser.add_argument("--base_url", default=None,
+                        help="OpenAI-compatible server on our own GPU, e.g. http://localhost:8000/v1. "
+                             "Leave unset to use Groq.")
+    parser.add_argument("--api_key_env", default="LOCAL_API_KEY",
+                        help="Environment variable holding the key for --base_url (a local server needs none).")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Questions processed at the same time (needs --base_url).")
+    parser.add_argument("--request_timeout", type=float, default=600, help="Seconds to wait for one local reply.")
+    parser.add_argument("--no_json_mode", action="store_true",
+                        help="Do not send response_format=json_object (for a server where it conflicts "
+                             "with reasoning); code fences around the JSON are stripped instead.")
     parser.add_argument("--max_completion_tokens", type=int, default=4096)
     parser.add_argument("--max_requests", type=int, default=900, help="Hard cap on HTTP calls this run.")
     parser.add_argument("--min_interval", type=float, default=2.5, help="Seconds between calls (30/min = 2.0).")
@@ -740,10 +836,19 @@ def main():
         sys.exit(f"Checkpoint in {args.out_dir} was written with prompt version {sorted(stale)}, "
                  f"current is {PROMPT_VERSION}. Use a new --out_dir so prompt versions are not mixed.")
 
-    client = GroqClient(args)
+    if args.base_url:
+        client = LocalClient(args)
+    else:
+        if args.workers != 1:
+            sys.exit("--workers > 1 needs --base_url: the Groq client is paced one call at a time.")
+        client = GroqClient(args)
     skipped, attempted, stopped_reason = [], 0, None
-    print(f"Prompt version {PROMPT_VERSION} | model {args.model} | resuming with {len(done)} checkpointed")
+    where = args.base_url or "groq"
+    print(f"Prompt version {PROMPT_VERSION} | model {args.model} | backend {where} | "
+          f"workers {args.workers} | resuming with {len(done)} checkpointed")
 
+    # walk the seeded order and collect the questions that still need an answer
+    pending = []
     for qid in ids:
         if attempted >= args.limit:
             break
@@ -756,21 +861,50 @@ def main():
         previous = done.get(qid)
         if previous and (previous["status"] == "accepted" or not args.retry_rejected):
             continue
+        pending.append((qid, row, selection))
 
-        targets, residual = selection
+    stop = threading.Event()
+
+    def work(item):
+        if stop.is_set():
+            return None
+        _, row, (targets, residual) = item
+        return process_question(row, targets, residual, client, args)
+
+    # Questions run in parallel; only this thread writes the checkpoint, so the file stays
+    # one JSON record per line. Results do not depend on the order they finish in.
+    finished = 0
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(work, item): item for item in pending}
         try:
-            record = process_question(row, targets, residual, client, args)
-        except BudgetExhausted as error:
-            stopped_reason = str(error)
-            attempted -= 1
-            break
-        append_checkpoint(record, checkpoint_path)
-        done[qid] = record
-        note = "" if record["status"] == "accepted" else "  " + "; ".join(record["reasons"][:3])
-        print(f"[{attempted:4d}/{args.limit}] {record['status']:8s} {qid}  "
-              f"targets={len(targets)}  calls={client.requests_made}{note}", flush=True)
+            for future in as_completed(futures):
+                qid, _, (targets, _) = futures[future]
+                try:
+                    record = future.result()
+                except BudgetExhausted as error:
+                    stopped_reason = stopped_reason or str(error)
+                    stop.set()
+                    continue
+                if record is None:
+                    continue
+                append_checkpoint(record, checkpoint_path)
+                done[qid] = record
+                finished += 1
+                note = "" if record["status"] == "accepted" else "  " + "; ".join(record["reasons"][:3])
+                print(f"[{finished:5d}/{len(pending)}] {record['status']:8s} {qid}  "
+                      f"targets={len(targets)}  calls={client.requests_made}{note}", flush=True)
+        except BaseException:
+            # error or Ctrl-C: start nothing new; requests already sent finish first
+            # (the pool waits for them), and their answers are not checkpointed
+            stop.set()
+            for future in futures:
+                future.cancel()
+            raise
 
-    manifest = export(list(done.values()), skipped, args.out_dir, args, stopped_reason)
+    # same order as the seeded question list, whatever order the answers arrived in
+    order = {qid: i for i, qid in enumerate(ids)}
+    records = sorted(done.values(), key=lambda r: order.get(r["question_id"], len(order)))
+    manifest = export(records, skipped, args.out_dir, args, stopped_reason)
 
     print(f"\nAccepted questions:     {manifest['questions_accepted']}")
     print(f"  with 2+ targets:      {manifest['accepted_with_multiple_targets']}")
