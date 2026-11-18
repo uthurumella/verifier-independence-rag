@@ -1,0 +1,25 @@
+# Task 3: generator-verifier independence.
+#
+# The generator and its answers stay fixed (results/rag/<rag_tag>). Only the
+# evidence the verifier reads changes. Four conditions, each judged by the same
+# two verifier models as Task 2 (configs/verifier_config.yaml):
+#
+#   same_evidence  the generator's own top-k passages            (from Task 2, results/verifier/<same_evidence_tag>)
+#   bm25           independent retriever (BM25) over the SAME corpus the generator used
+#                  (clean, or that attack's poisoned corpus)       -> different retrieval path, same data
+#   reference      dense retrieval over the separately indexed clean HotpotQA corpus
+#                  (never contains poison)                        -> separate reference evidence view
+#
+# Same model, same evidence vs other model, same evidence  = does changing the MODEL help?
+# Same model, same evidence vs bm25 / reference            = does changing the EVIDENCE help?
+#
+# Fields marked [locked] are hashed into run_meta.json.
+
+rag_config: configs/rag_config.yaml
+verifier_config: configs/verifier_config.yaml   # models, prompt, dtype, batch size (same as Task 2)
+rag_tag: pilot                                  # generator answers to verify
+same_evidence_tag: pilot                        # Task 2 verifier results reused for the same-evidence condition
+results_root: results/independence
+
+conditions: [bm25, reference]                   # [locked] new verifier evidence views (same_evidence comes from Task 2)
+reference_variant: clean_v1                     # [locked] the separately indexed reference corpus

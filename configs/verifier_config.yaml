@@ -1,0 +1,45 @@
+# Task 2 (part 2): same-evidence verifier.
+#
+# A verifier reads the generator's answer together with EXACTLY the same top-k
+# passages the generator saw (same passage ids, same order, same 220-word cut)
+# and says whether the answer is supported. Two verifiers are compared:
+#   same   - the generator's own model (Qwen2.5-3B-Instruct, same commit)
+#   other  - a different model family of similar size
+#
+# Fields marked [locked] define a verifier run. They are hashed into run_meta.json
+# and a results folder refuses to resume with different values.
+
+rag_config: configs/rag_config.yaml   # generator run settings (passage format, top-k, models)
+rag_tag: pilot                        # which results/rag/<tag>/per_question.jsonl to verify
+results_root: results/verifier
+
+verifiers:                            # [locked]
+  - name: same
+    model_name: Qwen/Qwen2.5-3B-Instruct
+    revision: generator               # "generator" = the exact commit the generator used in rag_tag
+  - name: other
+    model_name: microsoft/Phi-3.5-mini-instruct
+    revision: 2fe192450127e6a83f7441aef6e3ca586c338b77  # exact commit used in Tasks 2-3 (pinned for reproducibility)
+
+dtype: float16                        # [locked] T4 has no bfloat16
+batch_size: 8                         # speed only; lower it if the GPU runs out of memory
+
+# The verifier answers Yes or No. Instead of parsing generated text, the score is
+# the model's next-token probability of "Yes" against "No" (no parsing failures,
+# fully deterministic). accept = P(Yes) > P(No).
+prompt:                               # [locked]
+  system: >-
+    You check answers to questions. Judge the proposed answer using only the
+    passages provided. Reply with Yes or No only.
+  user: |-
+    Passages:
+    {passages}
+
+    Question: {question}
+    Proposed answer: {answer}
+
+    Is the proposed answer correct according to the passages? Reply with Yes or No.
+  yes_words: ["Yes", " Yes", "yes", " yes", "YES"]
+  no_words: ["No", " No", "no", " no", "NO"]
+
+n_examples: 4                         # examples per category in examples.md
