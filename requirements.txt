@@ -8,3 +8,6 @@ bm25s>=0.2.14
 PyStemmer
 sentence-transformers>=3.0
 huggingface_hub
+# Generator and verifiers (Tasks 2-3)
+torch
+transformers
