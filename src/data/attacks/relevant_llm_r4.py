@@ -262,6 +262,31 @@ base.parse_and_validate = parse_and_validate
 base.validate_version = validate_version
 base.explain = explain
 
+
+# ---- export: keep the strict check without stopping the run ----
+# --derived_forms accepts a list answer when every item appears (e.g. "A, B, and C" for "A, B, C"), but the base
+# export re-checks the exact phrase and stops on such a question. With --derived_forms, a question whose versions
+# lack the exact phrase is rejected here instead (1 of 3,284 in the full run), so every exported passage still
+# states the false answer verbatim.
+EXPORT_CHECK_REASON = "export_check:false_answer_not_verbatim(list joined with 'and')"
+_r3_export = base.export
+
+
+def demote_not_verbatim(rec):
+    if rec["status"] != "accepted" or all(base.contains(v, rec["replacement"])
+                                          for t in rec["targets"] for v in t["versions"]):
+        return rec
+    return dict(rec, status="rejected", reasons=[EXPORT_CHECK_REASON])
+
+
+def export(records, skipped, out_dir, args, stopped_reason):
+    if DERIVED:
+        records = [demote_not_verbatim(r) for r in records]
+    return _r3_export(records, skipped, out_dir, args, stopped_reason)
+
+
+base.export = export
+
 if __name__ == "__main__":
     if not any(a == "--out_dir" or a.startswith("--out_dir=") for a in sys.argv[1:]):
         sys.argv += ["--out_dir", DEFAULT_OUT_DIR]
