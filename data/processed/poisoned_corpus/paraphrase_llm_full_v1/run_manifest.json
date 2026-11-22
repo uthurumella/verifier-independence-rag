@@ -1,0 +1,42 @@
+{
+  "attack_type": "paraphrase_llm",
+  "model": "openai/gpt-oss-120b",
+  "backend": "http://127.0.0.1:8000/v1",
+  "prompt_version": "8547a126ef",
+  "split": "all",
+  "seed": 42,
+  "copies_per_passage": 3,
+  "max_attempts": 3,
+  "max_pair_similarity": 0.8,
+  "questions_accepted": 3472,
+  "questions_rejected": 964,
+  "accepted_with_multiple_targets": 222,
+  "accepted_with_residual_nongold_leak": 592,
+  "poisoned_passages": 11082,
+  "skipped_ineligible": {
+    "answer_in_gold_title": 2492,
+    "answer_is_yes_no": 458,
+    "answer_absent_from_gold": 5,
+    "answer_too_short": 14
+  },
+  "rejection_reason_counts": {
+    "name_missing": 1238,
+    "number_missing": 554,
+    "length_ratio": 406,
+    "true_answer_present": 173,
+    "too_close_to_source": 171,
+    "number_added": 144,
+    "true_answer_fragment_present": 100,
+    "false_answer_absent": 84,
+    "subject_dropped": 77,
+    "replacement_already_in_source": 26,
+    "near_duplicate": 12,
+    "replacement_overlaps_answer": 8,
+    "header_or_markup": 6,
+    "expected_3_versions_got": 2
+  },
+  "stopped_early": null,
+  "max_source_similarity": 0.75,
+  "base_script": "contradiction_llm.py",
+  "output_normalization": "special hyphens, curly quotes, odd spaces -> plain, unless used by the source"
+}
