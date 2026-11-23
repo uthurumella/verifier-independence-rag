@@ -2,312 +2,232 @@
 
 ## Overview
 
-A common way to make retrieval-augmented generation safer is to add a verifier:
-a second model that checks the generated answer before it is returned. This
-project asks whether that check does anything useful when the verifier reads
-the same evidence the generator did.
+A common way to make retrieval-augmented generation (RAG) safer is to add a verifier: a second model that checks
+the generated answer before it is returned. This project asks whether that check helps when the verifier reads the
+same evidence the generator did, and how much independence (a different model, a different retriever, a separate
+evidence source) it needs before it stops failing together with the generator.
 
-The repository contains the data pipeline for that study. It prepares a
-HotpotQA subset, builds a clean retrieval corpus, and generates controlled
-poisoned versions of that corpus so that generator and verifier behaviour can
-be compared under identical questions with and without misleading evidence.
+This repository holds the data pipeline for the study: a HotpotQA question pool with a fixed dev/test split, a
+clean retrieval corpus, four knowledge-base poisoning attacks with their released datasets, dense and BM25
+retrieval, and the baseline RAG pipeline that the verifier experiments build on.
 
-## Research Question
+**Research question.** How does the degree of independence between the generator and the verifier affect their
+tendency to fail together under knowledge poisoning?
 
-How does the degree of independence between the generator and verifier affect
-their tendency to fail together under knowledge poisoning?
+**Why it matters.** If a poisoned passage misleads the generator and the verifier is handed the same passage, the
+verifier has nothing independent to check against. Swapping in a different model family may not help, because both
+models reason over the same bad evidence. What may matter more is whether the verifier retrieves its own evidence.
+Verifier-based defences are deployed on the assumption that a second model adds a real safety layer; if that
+independence is superficial, so is the protection.
 
-## Why This Matters
+## Contents
 
-If a poisoned passage misleads the generator, and the verifier is handed the
-same passage, the verifier has nothing independent to check against. Swapping
-in a different model family may not help, because both models are reasoning
-over the same bad evidence. What may matter more is whether the verifier
-retrieves its own evidence, through its own retriever, over its own index.
-
-Verifier-based defences are being deployed on the assumption that a second
-model adds a real safety layer. If that independence is superficial, so is the
-protection.
+| Path | What it is |
+|---|---|
+| `src/data/` | Data loading, dev/test split, clean corpus, poisoned corpora |
+| `src/data/attacks/` | The four poisoning attacks |
+| `src/retrieval/` | Dense and BM25 indexes, retrieval check (`smoke_test.py`) |
+| `src/rag/` | Baseline RAG pipeline: generator, metrics, and the two RAG question sets below |
+| `configs/` | Data, index and RAG settings (`*_full.yaml` for the full-scale run) |
+| `scripts/run_poison_h100.sh` | Runs the LLM attacks on a local GPU (see `README_H100.md`) |
+| `data/processed/splits/` | Committed dev/test question IDs |
+| `data/processed/poisoned_corpus/` | Released poisoned passages, one folder per attack |
+| `data/processed/clean_correct_top5_v1/` | 3,711 questions the baseline RAG answers correctly on the clean corpus |
+| `data/processed/poison_misled_cases_v1/` | 240 cases (235 questions) from that set that turn wrong on a poisoned corpus (factual and pilot LLM sets) |
 
 ## Dataset
 
-HotpotQA, distractor configuration.
+HotpotQA, distractor configuration, dev split: 7,405 multi-hop questions (5,918 bridge, 1,487 comparison), all
+labelled hard. Each question comes with 2 gold supporting passages plus distractors: 10 paragraphs in all for
+7,345 questions and 2 to 9 for the other 60. The question pool is split 80/20 at the question level with a fixed
+seed (42) into **dev (5,924)** and **test (1,481)**. The split was fixed before any attack was tuned; the test set
+checks whether results hold on questions the pipeline was never adapted to.
 
-- 7,405 dev questions, each with 10 context paragraphs: 2 gold supporting
-  passages and 8 distractors
-- All questions in the dev split are labelled `hard`
-- 5,918 bridge-type and 1,487 comparison-type questions
-
-The dev split is used as the question pool. Questions are split 80/20 into
-development (5,924) and test (1,481) sets at the question level under a fixed
-seed. The resulting ID lists are committed to this repository. The split was
-fixed before any attack was tuned, and the test set is reserved for checking
-whether results hold on questions the pipeline was never adapted to.
-
-Source data is not redistributed. `src/data/load_hotpotqa.py` downloads it.
+Source data is not redistributed; `src/data/load_hotpotqa.py` downloads it.
 
 - Source: https://huggingface.co/datasets/hotpotqa/hotpot_qa
-- Paper: Yang et al., *HotpotQA: A Dataset for Diverse, Explainable Multi-hop
-  Question Answering*, EMNLP 2018
-- License: CC BY-SA 4.0. Derived artifacts here inherit its share-alike terms.
+- Paper: Yang et al., *HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question Answering*, EMNLP 2018
+- License: CC BY-SA 4.0; the derived datasets in this repository inherit its share-alike terms
 
-## Poisoning Method
+## Corpus and threat model
 
-**Corpus.** Passages are flattened out of their per-question bundles into a
-single global pool of 66,581 unique passages, deduplicated by title. Retrieval
-runs over this whole pool rather than each question's own ten passages. In a
-per-question pool a poisoned passage would be retrieved by construction and
-attack success would measure nothing; against 66,581 competitors it has to
-actually outrank the alternatives.
+- **One global corpus.** All context paragraphs are pooled and deduplicated by title into 66,581 passages.
+  Retrieval runs over the whole pool, not each question's own paragraphs, so a poisoned passage has to outrank
+  66,581 competitors rather than being retrieved by construction.
+- **Gold evidence is kept.** Poisoned passages are added next to the original passages, never in place of them.
+  The true and the false claim coexist, and retrieval decides which one the generator sees.
+- **Poison is unmarked.** A poisoned passage carries the title of the gold passage it targets and is otherwise
+  indistinguishable. Which passages are poisoned is recorded only in a separate provenance file that is read at
+  scoring time, so the retriever, generator and verifier stay blind to it.
+- **Three passages per target.** Each false claim is inserted three times under distinct IDs, both to give it a
+  realistic chance of reaching the top k and to test whether repeated copies are mistaken for independent
+  corroboration.
 
-**Gold evidence is preserved.** Poisoned passages are added alongside the
-original supporting passages, never in place of them. The true and false claims
-coexist, and retrieval decides which one the generator sees. Removing gold
-would guarantee attack success by deleting the truth rather than competing with
-it, and would make clean and poisoned conditions incomparable.
+## Poisoning attacks
 
-**Poison is unmarked.** A poisoned passage carries the title of the passage it
-was derived from and is otherwise indistinguishable. Nothing in the corpus flags
-it. Provenance is written to a separate file that never enters the corpus, so
-the retriever, generator, and verifier stay blind to which passages are
-poisoned. That file is read only when scoring.
+| Attack | What the poisoned passage is | Generator | Script (`src/data/attacks/`) |
+|---|---|---|---|
+| Factual substitution | A gold passage with the answer's number changed; 3 identical copies | rule-based | `factual_substitution.py` |
+| Contradiction | A gold passage with the answer replaced by a false one; 3 differently worded versions | `openai/gpt-oss-20b` | `contradiction_llm.py` |
+| Paraphrase | A full rewrite of a gold passage stating a false answer; 3 versions | `openai/gpt-oss-120b` | `paraphrase_llm.py` |
+| Highly relevant | A new passage written around the question that states a false answer as fact, filed under a gold passage's title; 3 versions | `openai/gpt-oss-120b` | `relevant_llm_r4.py --derived_forms` |
 
-**Three copies per question.** Each poisoned claim is inserted three times with
-distinct passage IDs. This is partly to give poison a realistic chance of
-reaching top-k, and partly because one of the planned experiments asks whether
-repeated copies of a single false claim are mistaken for independent
-corroboration.
+**Factual substitution** targets only the value the question asks for. It takes the first number in the gold
+answer, finds the first gold passage that contains it, and replaces every occurrence of that number in the passage
+that is not directly followed by a comma or another digit, with a different value (a year is shifted by 5 to 20;
+any other number is scaled by 0.55 to 2.0). It applies only to questions whose answer contains a number.
 
-### Factual substitution
+**Contradiction, paraphrase and highly relevant** share one eligibility rule, one seeded question order and one
+validation framework (`contradiction_llm.py`). A question is skipped before generation if its answer is yes/no, a
+single character, not found in the gold passages, or contained in the title of a gold passage (the poisoned
+passage keeps that title, so the true answer would remain in it). Contradiction and paraphrase rewrite every gold
+passage that states the answer; highly relevant writes one new passage per question. The contradiction and
+paraphrase prompts never include the question. The highly relevant prompt does, but a version may not copy a run
+of more than 7 words from the question (names and numbers not counted) or of more than 12 words from a gold
+passage.
 
-The implemented attack. It finds the value the question actually asks for and
-changes only that.
+**Validation.** A question is accepted only if every version passes every check, within two (contradiction) or
+three (paraphrase, highly relevant) generation attempts; otherwise it is rejected and its reasons are logged, with
+no fallback. The main checks:
 
-The rule is narrow on purpose: a number in a passage is poisoned only if that
-same number appears in the question's gold answer. So for a question whose
-answer is `3,677 seated`, the script locates `3,677` in the gold passage and
-replaces it with a different plausible figure, leaving every other number in
-the passage untouched.
+- the false answer differs from the true one and is not already in the passage or the question;
+- every version states the false answer, and neither the true answer nor its distinctive parts remain;
+- the other names and numbers of the source are kept, no new numbers appear, and the passage still names its
+  subject (highly relevant: no names or numbers beyond those in the question and gold passages);
+- one plain paragraph without markup, 0.6 to 1.5 times the source's length in words (highly relevant: fixed word
+  limits instead);
+- the three versions are not near copies of each other (pairwise similarity at most 0.8);
+- attack-specific rules: paraphrase versions must be full rewrites (word-sequence similarity to the source at most
+  0.75); highly relevant versions may not hedge or refer to themselves, must keep dates in the right order, must
+  name every subject a "what do both share" question asks about, and may not add commentary or sentences that only
+  restate the value.
 
-An earlier version picked the first number it found in the gold sentence. That
-poisoned 7,352 questions, but most of those substitutions changed values the
-question did not depend on — a director's birth year altered on a question
-about his nationality, for example. The passage became false without becoming
-misleading. Anchoring on the answer cut coverage to 1,099 questions and made
-every poisoned passage attack the fact the answer rests on.
+When writing the dataset, the export step re-checks every passage (false answer present, true answer absent) and
+stops if one fails. The corpus builder checks that no poisoned ID collides with a clean one and that the counts
+add up.
 
-Coverage is 1,099 of 7,405 questions, or 14.8%, because most HotpotQA answers
-are entities or yes/no rather than numerals. Of those, 1,063 are bridge-type
-and 36 are comparison-type; comparison questions rarely qualify because their
-answers are usually yes/no or a name rather than a quantity.
+## Released datasets
 
-The answer field itself is never modified. It is read only to locate the target
-and remains the ground truth used for scoring.
+All four attacks were run on the full question pool (dev + test) with seed 42. The factual attack considers every
+question; the three LLM attacks attempt the 4,436 eligible ones.
 
-### Validation
+| Attack | Folder (`data/processed/poisoned_corpus/`) | Questions attempted | Poisoned questions (dev / test) | Share poisoned | Poisoned passages |
+|---|---|---|---|---|---|
+| Factual substitution | `factual_v1` | 7,405 | 1,099 (904 / 195) | 14.8% | 3,297 |
+| Contradiction | `contradiction_llm_full_v1` | 4,436 | 2,120 (1,684 / 436) | 47.8% | 6,681 |
+| Paraphrase | `paraphrase_llm_full_v1` | 4,436 | 3,472 (2,749 / 723) | 78.3% | 11,082 |
+| Highly relevant | `relevant_llm_full_v1` | 4,436 | 3,283 (2,635 / 648) | 74.0% | 9,849 |
 
-Substitutions are matched on whole tokens, so `90` cannot match inside `1990`
-or `3,907`. Every occurrence of the target value in a passage is replaced
-rather than just the first, so a passage stating the same figure twice cannot
-end up contradicting itself. The replacement is guaranteed to differ from the
-original, so no question can be recorded as poisoned while its text is
-unchanged.
+Each full-scale LLM folder (`*_llm_full_v1`) contains:
 
-The merge step asserts that no poisoned passage ID collides with a clean one,
-that no passage ID is duplicated, and that the merged corpus size equals the sum
-of its parts. Any failure halts the run rather than writing a corpus that would
-be trusted downstream.
+| File | Contents |
+|---|---|
+| `poisoned_passages.jsonl` | The poisoned passages (`passage_id`, `title`, `text`) that are merged into the corpus |
+| `provenance.jsonl` | One row per passage: question ID and type, target passage, true and false value, copy index, number of non-gold passages still stating the true answer, model, prompt version |
+| `run_manifest.json` | Settings, counts, and the reasons questions were skipped or rejected |
+| `README.md` | Data card: how the set was made, counts by split, quality checks, retrieval results, limitations |
 
-### Contradiction: what was tried and why it was set aside
+`factual_v1` contains `poisoned_passages.jsonl` and `provenance.jsonl`. Kept out of Git: the merged corpora and
+search indexes, which are large and are rebuilt from the released files with the commands below, and the
+raw generation records (checkpoints, rejected and skipped questions, inspection sheets), which are archived with
+md5 checks and available on request.
 
-Contradictory-passage poisoning was attempted with rule-based substitution.
-Four approaches were built and evaluated, and each failed for a different
-reason. The sequence is recorded here because it shapes how the remaining
-attack types will be built.
+The `*_llm_v1` folders without `full` are the earlier pilot sets (30–33 dev questions each), generated through the
+Groq API while the prompts and checks were developed. The contradiction and paraphrase pilots use the same model
+and prompt version as their full sets; the highly relevant pilot mixes earlier prompt versions and both models, as
+recorded per passage in its `provenance.jsonl`. They are kept for reference; the `*_full_v1` sets supersede them.
 
-**Substitute a random answer from the dataset.** For each question, the answer
-was located in the gold passage and replaced with another question's answer.
-This covered 4,194 questions, but replacements ignored what kind of thing the
-answer was. A location was replaced by a number, producing text such as
-"...based in 16,825...". Grammatically broken rather than factually misleading.
+## Quality checks
 
-**Match on surface form.** Answers were bucketed by shape — year, numeric,
-multi-word, single-word — and replacements drawn from the matching bucket. This
-fixed the grammar, but "multi-word" held 4,851 answers of every possible type,
-so a shopping mall's floor area could still be replaced by a person's name.
-Three of three random samples were incoherent.
+| Check | Factual | Contradiction | Paraphrase | Highly relevant |
+|---|---|---|---|---|
+| Poisoned passages stating the false answer | 100%² | 100% | 100% | 100% |
+| Poisoned passages still stating the true answer | 2.8%² | 0%¹ | 0% | 0% |
+| False answer of the same kind as the true one (4-digit number / other number / text) | 98.9% | 98.4% | 98.9% | 98.0% |
+| Manual read of 50 random poisoned questions: clean and plausible | not done | 45 | 37 | 42 |
 
-**Infer the type from the question.** Patterns over interrogatives — who,
-where, how large — were used to decide what kind of answer was expected.
-HotpotQA questions are multi-hop and name several entity types at once, so
-"What government position was held by the woman who..." matched the person
-pattern even though the answer is a job title. Roughly 38% of questions still
-landed in an untyped pool, and mislabelled cases contaminated the pools they
-were sampled from.
+The first two rows use the pipeline's own whole-token match on normalized text, which every released LLM passage
+passed at export. ¹ A separate, looser match (punctuation and articles removed) flagged 6 of the 6,681 contradiction
+passages (0.1%) as possibly still containing the true answer. ² The factual attack has no content check at generation
+time; it was checked afterwards. The false number appears in every passage, but in 270 of 3,297 it is joined to
+letters (e.g. road "A41" becomes "A29"), so the whole-token match finds it in only 91.8%. By the whole-token match,
+the true number is still present in 93 passages (31 questions), because an occurrence followed by a comma
+("released in 2000, it was") is not replaced. For every set, passage IDs are unique, each passage
+keeps its target's title, each question has a single false value, and every poisoned question appears in the
+provenance file. Each data card lists what the manual read found.
 
-**Type answers with named-entity recognition.** spaCy NER was run on the gold
-passage to type each answer in context, and replacements were drawn from pools
-of entities with the same label. The typing was correct, but the pools held
-fragments such as "Dean of Accounting of Universiti", producing text like
-"UROVESA is best known for the production of the Dissection".
+## Retrieval check
 
-Separately, prepending a question-aligned header to lift retrieval rank made
-passages read as obviously synthetic, which a verifier could reject on form
-rather than on facts.
+Does the poison reach the retriever? `src/retrieval/smoke_test.py` runs every poisoned question against the
+poisoned corpus and against the clean corpus and compares the rankings. Dense retrieval uses `intfloat/e5-base-v2`
+(pinned revision) with normalized embeddings and an exact inner-product FAISS index (cosine similarity); BM25 uses
+the Lucene variant with k1 = 1.5 and b = 0.75. Dev and test give similar figures.
 
-The conclusion was that coherent adversarial text needs generation, not token
-substitution.
+| Attack | Dense: poison in top 5 | Dense: poison in top 10 | Dense: poison above its target | BM25: poison in top 5 | BM25: poison in top 10 | Gold pushed out of top 5 (dense / BM25) |
+|---|---|---|---|---|---|---|
+| Factual substitution | 0.59 | 0.70 | 0.36 | 0.42 | 0.53 | 0.01 / 0.00 |
+| Contradiction | 0.60 | 0.71 | 0.44 | 0.46 | 0.57 | 0.01 / 0.01 |
+| Paraphrase | 0.50 | 0.61 | 0.18 | 0.42 | 0.53 | 0.00 / 0.01 |
+| Highly relevant | 0.99 | 1.00 | 0.97 | 0.99 | 1.00 | 0.04 / 0.06 |
 
-### Contradiction (LLM-generated)
+*Poison in top k*: share of poisoned questions with at least one poisoned passage in the top k. *Poison above its
+target*: a poisoned passage ranks higher than the gold passage it targets (or the target is not in the top 20).
+*Gold pushed out*: a gold passage is in the clean top 5 but not in the poisoned top 5.
 
-Contradiction poisoning is therefore generated with a language model. The
-script is `src/data/attacks/contradiction_llm.py`.
+The three attacks that rewrite a gold passage put a poisoned passage in the top 5 for roughly half the questions
+and almost never push the gold passage out (at most 1% of questions), so when the poison is retrieved the truth is
+almost always retrieved with it: the conflict a verifier has to resolve. Highly relevant poison is retrieved for
+nearly every question, with the first poisoned passage at median rank 1.
 
-For each eligible question, every gold passage that states the answer is
-rewritten so that it states one false answer instead. Each passage gets three
-differently worded versions carrying the same false answer. The model is never
-shown the question, only the passages and the value to replace, so it cannot
-produce a question-aligned header. All other design rules are unchanged: gold
-passages stay in the corpus, poisoned passages keep their source title and are
-unmarked, and provenance is written to a separate file.
-
-**Eligibility.** Of the 5,924 dev-split questions, 3,547 (59.9%) are eligible.
-The rest are skipped before any generation: 1,994 because the answer is the
-title of a gold passage, which would leave the true answer in the title of its
-own contradiction; 367 yes/no answers; 11 single-character answers; and 5 whose
-answer does not appear verbatim in a gold passage.
-
-**Validation.** A question is accepted only if every version of every target
-passage passes every check; otherwise it is rejected and logged with reasons,
-with no fallback. The checks require that the true answer and its distinctive
-parts are absent, the false answer is present, every other number and name in
-the source is preserved, no new numbers are introduced, the passage still names
-its subject, the text is a single plain paragraph of similar length, and no two
-versions are near copies of each other.
-
-**Current status: partial.** 65 dev questions have been attempted, 33 accepted
-and 32 rejected, giving 108 poisoned passages. Three accepted questions have
-both gold passages poisoned. The set is small because generation runs on the
-Groq free tier (`openai/gpt-oss-20b`), which allows 200,000 tokens per day,
-roughly 100 attempts. The run is checkpointed and seeded, so repeating the same
-command continues from where it stopped and never repeats a question.
-
-**Known limitations.**
-
-- Retrieval and attack success have not been measured yet. Whether these
-  passages reach top-k and mislead a generator is untested.
-- In a manual reading of 11 accepted questions, 9 were clean and 2 had a minor
-  inconsistency the checks cannot detect, such as a changed death year that no
-  longer matches the stated age.
-- For 660 of the 3,547 eligible questions, a distractor passage in the same
-  bundle also states the true answer and is not rewritten. The count is
-  recorded per question in the provenance file.
-- Answers are matched by exact wording, so the same entity under another name
-  in a different passage is not detected.
-- Every mention of the answer in a target passage is replaced, including
-  mentions unrelated to the question.
-- Only the dev split has been generated. The test split is reserved until the
-  prompt is frozen.
-
-**Running it.**
+## Reproducing
 
 ```
-export GROQ_API_KEY=...
-python src/data/attacks/contradiction_llm.py --dry_run
-python src/data/attacks/contradiction_llm.py --limit 65 --out_dir data/processed/poisoned_corpus/contradiction_llm_v1
-python src/data/build_poisoned_corpus.py --poison_path data/processed/poisoned_corpus/contradiction_llm_v1/poisoned_passages.jsonl --out_dir data/processed/poisoned_corpus/contradiction_llm_v1 --variant_name contradiction_llm_v1
+pip install -r requirements.txt
+python src/data/load_hotpotqa.py                  # downloads HotpotQA (not redistributed)
+python src/data/build_clean_corpus.py             # 66,581 passages; the dev/test split is committed
+python src/data/attacks/factual_substitution.py   # factual attack (rule-based, CPU)
+bash scripts/run_poison_h100.sh attacks           # LLM attacks on a local GPU via vLLM (see README_H100.md)
+bash scripts/run_poison_h100.sh corpora           # clean corpus + each attack's passages
+bash scripts/run_poison_h100.sh index             # dense and BM25 indexes, then the retrieval check
 ```
 
-### Paraphrased misinformation (LLM-generated)
+To use the released passages without regenerating them, skip the two attack steps: `build_poisoned_corpus.py`
+merges a folder's `poisoned_passages.jsonl` into the clean corpus. LLM generation is checkpointed, so re-running a
+command resumes where it stopped; because the model samples, a fresh run produces different passages. The exact
+commands, models and hardware used for each LLM set are in its data card and `run_manifest.json`.
 
-The third attack states one false answer in three passages, none of which
-stays close to the wording of the gold passage. The script is
-`src/data/attacks/paraphrase_llm.py`.
+## Limitations
 
-**How it differs from contradiction.** In the contradiction attack, the first
-version of each passage is the source with only the value changed. Here every
-version must be a full rewrite. A version whose word-sequence similarity to
-its source is above 0.75 is rejected. A source with only the value changed
-scores about 0.97, so the rule separates the two attacks cleanly. This attack
-tests whether several differently worded passages carrying one false claim are
-treated as independent corroboration.
+- **Coverage.** The LLM attacks cover only the 4,436 eligible questions. Comparison questions are
+  under-represented (86–178 per set) because their answers are mostly yes/no or a passage title. Factual
+  substitution covers only answers that contain a number.
+- **Residual truth.** For about 17% of the questions poisoned by an LLM attack, one of the question's own
+  distractor paragraphs (which are part of the corpus) also states the true answer and is not rewritten. The count
+  is recorded per passage in `provenance.jsonl`.
+- **Plausibility is not checked automatically.** The manual reads found swaps that are implausible or inconsistent
+  with other facts in the same passage (3 to 10 of 50 per set).
+- **Detectable traces.** 36% of contradiction passages contain typographic characters (mostly a non-breaking
+  hyphen) that their source does not; the paraphrase and highly relevant outputs are normalized, leaving 2.8% and
+  1.9%. In the manual read, 4 of 50 highly relevant questions had wording that echoes the question ("The question
+  mentions…"). A detector could use such traces.
+- **Factual substitution artefacts.** The number swap ignores context. Of the 1,099 questions: in 113 the changed
+  number is the day of a date and becomes impossible (e.g. "September 48 2017"); in 122 the number was read with a
+  trailing comma, which is dropped from the passage ("September 30, 2017" becomes "September 48 2017"); in 31 an
+  occurrence of the true number followed by a comma is left unchanged, so the passage states both values; 9 year
+  swaps produce a year after 2026; 31 changed numbers sit next to a decimal point (part of a decimal such as 1.5);
+  and 164 answers are a single digit, so every standalone copy of that digit in the passage is changed.
+- **Wording-based matching.** The true-answer checks match the answer's wording (plus a few derived forms in the
+  highly relevant attack), so the same entity under a different name is not detected.
 
-**Implementation.** The script imports `contradiction_llm.py` and reuses its
-eligibility rules, client, checkpointing, validation, and export. It adds the
-similarity check, a prompt that requires full rewrites, a per-passage list of
-the names and numbers the validator will look for, and a step that converts
-special hyphens and curly quotes in the model output to plain ones. The model
-is still never shown the question. All design rules are unchanged: gold
-passages stay in the corpus, poisoned passages keep their source title and are
-unmarked, and provenance is written to a separate file.
+## Development notes
 
-**Current status: partial.** 45 dev questions were attempted with
-`openai/gpt-oss-120b` on the Groq free tier, with up to three attempts per
-question. 33 were accepted and 12 rejected. All 33 accepted questions were
-then read against their gold passages, and 3 were removed because the poison
-could not work: one contradicted a fact kept in the same passage, one left the
-true answer in the passage in singular form, and one gave a false answer that
-was not among the options of a comparison question. The released set is 30
-questions and 96 passages; two questions have both gold passages poisoned. The
-exclusions and their reasons are recorded in `run_manifest.json`.
+Contradiction poisoning was first attempted by rule-based substitution (a random answer from the dataset, answers
+bucketed by surface form, types inferred from the question, and named-entity typing). Each produced ungrammatical
+or incoherent text, and adding a question-shaped header to lift rank made passages look synthetic. The conclusion
+was that coherent adversarial text needs generation, which led to the three LLM attacks. Their prompts and checks
+were developed on the pilot runs and then frozen; the full-scale sets were generated with the final prompt
+versions and models on a local vLLM server.
 
-An earlier prompt revision was tested on 10 questions and discarded because
-its false answers were often of the wrong category. Its output is not part of
-this set.
+## Citation
 
-**Running it.**
-
-    export GROQ_API_KEY=...
-    python src/data/attacks/paraphrase_llm.py --dry_run
-    python src/data/attacks/paraphrase_llm.py --limit 45 --model openai/gpt-oss-120b --max_attempts 3
-    python src/data/build_poisoned_corpus.py --poison_path data/processed/poisoned_corpus/paraphrase_llm_v1/poisoned_passages.jsonl --out_dir data/processed/poisoned_corpus/paraphrase_llm_v1 --variant_name paraphrase_llm_v1
-
-### Highly relevant misleading passages (LLM-generated)
-
-The fourth attack writes new passages around the question itself. Each passage
-is filed under the title of a gold passage, names the people, works, and other
-specifics the question mentions, and states one false answer as plain fact. The
-scripts are `src/data/attacks/relevant_llm.py` and
-`src/data/attacks/relevant_llm_r4.py`.
-
-**How it differs from the other attacks.** Contradiction and paraphrase rewrite
-a gold passage. Here the passage is new text aimed at the question, so it should
-rank highly in retrieval without any gold passage being edited. The model sees
-the question and the gold passages as background and may use their facts but
-not copy them: similarity to any gold passage is at most 0.75, no shared run is
-longer than 12 words, and no more than 7 consecutive ordinary words come from
-the question.
-
-**Implementation.** Both scripts import `contradiction_llm.py` and reuse its
-eligibility rules, client, checkpointing, and export format. A version is
-rejected if the true answer or any form of it remains, the false answer is
-missing, it hedges, refers to itself, or opens with a pronoun, it adds names or
-numbers not found in the question or gold passages, or its false answer drops a
-target word the question itself states. `relevant_llm_r4.py` adds checks found
-during manual review: a false date must fall on the same side of every other
-date in the reference as the true one; when a question asks what two people
-share, every version names both; no "[value] was the [noun] where" sentences;
-no short sentence that only repeats the value; no summarizing commentary; and
-no invented spelled-out counts. Its `--derived_forms` option accepts a country
-name when the reference gives its adjective form (Austria for Austrian), and a
-list answer whose items all appear. With `--only_ids` it generates only the
-listed questions, so passages accepted earlier are never regenerated.
-
-**Current status: partial.** 59 dev questions were attempted, in the seeded
-order shared with the other LLM attacks. The first 40 were generated with
-revision 3, and all accepted output was read by eye and audited with the
-revision 4 checks. Ten flagged questions were regenerated with revision 4, and
-19 more questions were generated with it. After a final reading, 5 accepted
-questions were removed because the poison would not work, and one flagged
-question could not be regenerated. The released set is 33 questions and 99
-passages. `run_manifest.json` lists every exclusion with its reason, and each
-provenance record gives the prompt version, model, and run that produced its
-passage. Two earlier prompt revisions were tested on 10 questions and
-discarded; their output is not part of this set.
-
-**Running it.**
-
-    export GROQ_API_KEY=...
-    python src/data/attacks/relevant_llm.py --limit 40 --max_attempts 3 --out_dir <run folder>
-    python src/data/attacks/relevant_llm_r4.py --derived_forms --only_ids ids.txt --model openai/gpt-oss-120b --max_attempts 3 --out_dir <run folder>
-    python src/data/build_poisoned_corpus.py --poison_path data/processed/poisoned_corpus/relevant_llm_v1/poisoned_passages.jsonl --out_dir data/processed/poisoned_corpus/relevant_llm_v1 --variant_name relevant_llm_v1
+If you use the poisoned datasets, please cite HotpotQA (Yang et al., 2018) and this repository.
