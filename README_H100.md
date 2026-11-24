@@ -9,7 +9,8 @@ Groq) and the speed (many questions at once) change.
 | Paraphrase | `src/data/attacks/paraphrase_llm.py` | `openai/gpt-oss-120b` | 3 |
 | Highly relevant | `src/data/attacks/relevant_llm_r4.py --derived_forms` | `openai/gpt-oss-120b` | 3 |
 
-Factual poisoning is rule-based and already full scale (`data/processed/poisoned_corpus/factual_v1`).
+Factual poisoning is rule-based and already full scale (`data/processed/poisoned_corpus/factual_v2`, made by
+`src/data/attacks/factual_substitution_v2.py`).
 
 ## What was changed
 - `src/data/attacks/contradiction_llm.py`: `LocalClient` for an OpenAI-compatible server; new flags `--base_url`,
