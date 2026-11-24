@@ -148,9 +148,9 @@ stage_corpora() {
       --out_dir "$dir" --variant_name "${name}_llm_full_v1"
   done
   # the factual attack (rule-based, already full scale) also needs its corpus on a fresh machine
-  if [[ ! -f "$ROOT/factual_v1/corpus.jsonl" && -f "$ROOT/factual_v1/poisoned_passages.jsonl" ]]; then
-    "$PY" src/data/build_poisoned_corpus.py --poison_path "$ROOT/factual_v1/poisoned_passages.jsonl" \
-      --out_dir "$ROOT/factual_v1" --variant_name factual_v1
+  if [[ ! -f "$ROOT/factual_v2/corpus.jsonl" && -f "$ROOT/factual_v2/poisoned_passages.jsonl" ]]; then
+    "$PY" src/data/build_poisoned_corpus.py --poison_path "$ROOT/factual_v2/poisoned_passages.jsonl" \
+      --out_dir "$ROOT/factual_v2" --variant_name factual_v2
   fi
 }
 
