@@ -1,0 +1,21 @@
+{
+  "attack": "factual_substitution",
+  "version": "v2",
+  "script": "src/data/attacks/factual_substitution_v2.py",
+  "raw_path": "data/raw/dev.jsonl",
+  "seed": 42,
+  "copies_per_question": 3,
+  "last_year": 2026,
+  "outcomes": {
+    "answer_has_no_number": 6235,
+    "answer_number_is_part_of_a_decimal": 29,
+    "number_absent_from_gold_passage": 2,
+    "number_is_part_of_a_range": 47,
+    "poisoned": 1092,
+    "poisoned_bridge": 1054,
+    "poisoned_comparison": 38
+  },
+  "poisoned_questions": 1092,
+  "poisoned_passages": 3276,
+  "false_value_redrawn": 167
+}
