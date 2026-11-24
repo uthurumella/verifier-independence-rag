@@ -67,15 +67,21 @@ Source data is not redistributed; `src/data/load_hotpotqa.py` downloads it.
 
 | Attack | What the poisoned passage is | Generator | Script (`src/data/attacks/`) |
 |---|---|---|---|
-| Factual substitution | A gold passage with the answer's number changed; 3 identical copies | rule-based | `factual_substitution.py` |
+| Factual substitution | A gold passage with the answer's number changed; 3 identical copies | rule-based | `factual_substitution_v2.py` |
 | Contradiction | A gold passage with the answer replaced by a false one; 3 differently worded versions | `openai/gpt-oss-20b` | `contradiction_llm.py` |
 | Paraphrase | A full rewrite of a gold passage stating a false answer; 3 versions | `openai/gpt-oss-120b` | `paraphrase_llm.py` |
 | Highly relevant | A new passage written around the question that states a false answer as fact, filed under a gold passage's title; 3 versions | `openai/gpt-oss-120b` | `relevant_llm_r4.py --derived_forms` |
 
 **Factual substitution** targets only the value the question asks for. It takes the first number in the gold
-answer, finds the first gold passage that contains it, and replaces every occurrence of that number in the passage
-that is not directly followed by a comma or another digit, with a different value (a year is shifted by 5 to 20;
-any other number is scaled by 0.55 to 2.0). It applies only to questions whose answer contains a number.
+answer, finds the first gold passage that contains it, and replaces every standalone occurrence of that number in
+the passage (also one followed by a comma or full stop; never digits that belong to a larger number or a decimal)
+with a different value: a year (1000–2030) moves by 5 to 20 years and never past 2026, a decade moves by whole
+decades, a day of the month stays between 1 and 28, and any other number is scaled by 0.55 to 2.0. Ordinal suffixes
+follow the new number. Questions whose answer number is part of a decimal, or whose number is one end of a range
+in the passage ("26–30 August", "2013–14"), are skipped. Every passage is checked before it is written (false value
+present, true value absent, no impossible date). It applies only to questions whose answer contains a number.
+`factual_substitution_v2.py` replaced the first version (`factual_substitution.py`, output `factual_v1`), which
+ignored context; `factual_v2/v1_vs_v2.md` compares the two.
 
 **Contradiction, paraphrase and highly relevant** share one eligibility rule, one seeded question order and one
 validation framework (`contradiction_llm.py`). A question is skipped before generation if its answer is yes/no, a
@@ -113,7 +119,7 @@ question; the three LLM attacks attempt the 4,436 eligible ones.
 
 | Attack | Folder (`data/processed/poisoned_corpus/`) | Questions attempted | Poisoned questions (dev / test) | Share poisoned | Poisoned passages |
 |---|---|---|---|---|---|
-| Factual substitution | `factual_v1` | 7,405 | 1,099 (904 / 195) | 14.8% | 3,297 |
+| Factual substitution | `factual_v2` | 7,405 | 1,092 (896 / 196) | 14.7% | 3,276 |
 | Contradiction | `contradiction_llm_full_v1` | 4,436 | 2,120 (1,684 / 436) | 47.8% | 6,681 |
 | Paraphrase | `paraphrase_llm_full_v1` | 4,436 | 3,472 (2,749 / 723) | 78.3% | 11,082 |
 | Highly relevant | `relevant_llm_full_v1` | 4,436 | 3,283 (2,635 / 648) | 74.0% | 9,849 |
@@ -127,7 +133,9 @@ Each full-scale LLM folder (`*_llm_full_v1`) contains:
 | `run_manifest.json` | Settings, counts, and the reasons questions were skipped or rejected |
 | `README.md` | Data card: how the set was made, counts by split, quality checks, retrieval results, limitations |
 
-`factual_v1` contains `poisoned_passages.jsonl` and `provenance.jsonl`. Kept out of Git: the merged corpora and
+`factual_v2` contains `poisoned_passages.jsonl`, `provenance.jsonl`, `rejected.jsonl`,
+`run_manifest.json`, `v1_vs_v2.md` and a data card; `factual_v1` is kept because the pilot results were built on
+it. Kept out of Git: the merged corpora and
 search indexes, which are large and are rebuilt from the released files with the commands below, and the
 raw generation records (checkpoints, rejected and skipped questions, inspection sheets), which are archived with
 md5 checks and available on request.
@@ -142,19 +150,19 @@ recorded per passage in its `provenance.jsonl`. They are kept for reference; the
 | Check | Factual | Contradiction | Paraphrase | Highly relevant |
 |---|---|---|---|---|
 | Poisoned passages stating the false answer | 100%² | 100% | 100% | 100% |
-| Poisoned passages still stating the true answer | 2.8%² | 0%¹ | 0% | 0% |
-| False answer of the same kind as the true one (4-digit number / other number / text) | 98.9% | 98.4% | 98.9% | 98.0% |
-| Manual read of 50 random poisoned questions: clean and plausible | not done | 45 | 37 | 42 |
+| Poisoned passages still stating the true answer | 0.1%² | 0%¹ | 0% | 0% |
+| False answer of the same kind as the true one (4-digit number / other number / text) | 98.1% | 98.4% | 98.9% | 98.0% |
+| Manual read of random poisoned questions: clean and plausible | 26 of 30 | 45 of 50 | 37 of 50 | 42 of 50 |
 
 The first two rows use the pipeline's own whole-token match on normalized text, which every released LLM passage
 passed at export. ¹ A separate, looser match (punctuation and articles removed) flagged 6 of the 6,681 contradiction
-passages (0.1%) as possibly still containing the true answer. ² The factual attack has no content check at generation
-time; it was checked afterwards. The false number appears in every passage, but in 270 of 3,297 it is joined to
-letters (e.g. road "A41" becomes "A29"), so the whole-token match finds it in only 91.8%. By the whole-token match,
-the true number is still present in 93 passages (31 questions), because an occurrence followed by a comma
-("released in 2000, it was") is not replaced. For every set, passage IDs are unique, each passage
-keeps its target's title, each question has a single false value, and every poisoned question appears in the
-provenance file. Each data card lists what the manual read found.
+passages (0.1%) as possibly still containing the true answer. ² The factual attack checks every passage with its own
+number rule before writing it: the false number is present and the true number absent in all 3,276 passages. By the
+whole-token match the false number is found in 91.5%, because it can be joined to letters or a suffix (road "A41"
+becomes "A29", "12th" becomes "19th"), and the true number in 1 question (3 passages), where "3.11" is a nickname of
+the date 11 March. For every set, passage IDs are unique, each passage keeps its target's title, each question has a
+single false value, and every poisoned question appears in the provenance file. Each data card lists what the manual
+read found.
 
 ## Retrieval check
 
@@ -165,7 +173,7 @@ the Lucene variant with k1 = 1.5 and b = 0.75. Dev and test give similar figures
 
 | Attack | Dense: poison in top 5 | Dense: poison in top 10 | Dense: poison above its target | BM25: poison in top 5 | BM25: poison in top 10 | Gold pushed out of top 5 (dense / BM25) |
 |---|---|---|---|---|---|---|
-| Factual substitution | 0.59 | 0.70 | 0.36 | 0.42 | 0.53 | 0.01 / 0.00 |
+| Factual substitution | 0.59 | 0.70 | 0.39 | 0.42 | 0.53 | 0.01 / 0.00 |
 | Contradiction | 0.60 | 0.71 | 0.44 | 0.46 | 0.57 | 0.01 / 0.01 |
 | Paraphrase | 0.50 | 0.61 | 0.18 | 0.42 | 0.53 | 0.00 / 0.01 |
 | Highly relevant | 0.99 | 1.00 | 0.97 | 0.99 | 1.00 | 0.04 / 0.06 |
@@ -185,7 +193,7 @@ nearly every question, with the first poisoned passage at median rank 1.
 pip install -r requirements.txt
 python src/data/load_hotpotqa.py                  # downloads HotpotQA (not redistributed)
 python src/data/build_clean_corpus.py             # 66,581 passages; the dev/test split is committed
-python src/data/attacks/factual_substitution.py   # factual attack (rule-based, CPU)
+python src/data/attacks/factual_substitution_v2.py   # factual attack (rule-based, CPU)
 bash scripts/run_poison_h100.sh attacks           # LLM attacks on a local GPU via vLLM (see README_H100.md)
 bash scripts/run_poison_h100.sh corpora           # clean corpus + each attack's passages
 bash scripts/run_poison_h100.sh index             # dense and BM25 indexes, then the retrieval check
@@ -210,12 +218,11 @@ commands, models and hardware used for each LLM set are in its data card and `ru
   hyphen) that their source does not; the paraphrase and highly relevant outputs are normalized, leaving 2.8% and
   1.9%. In the manual read, 4 of 50 highly relevant questions had wording that echoes the question ("The question
   mentions…"). A detector could use such traces.
-- **Factual substitution artefacts.** The number swap ignores context. Of the 1,099 questions: in 113 the changed
-  number is the day of a date and becomes impossible (e.g. "September 48 2017"); in 122 the number was read with a
-  trailing comma, which is dropped from the passage ("September 30, 2017" becomes "September 48 2017"); in 31 an
-  occurrence of the true number followed by a comma is left unchanged, so the passage states both values; 9 year
-  swaps produce a year after 2026; 31 changed numbers sit next to a decimal point (part of a decimal such as 1.5);
-  and 164 answers are a single digit, so every standalone copy of that digit in the passage is changed.
+- **Factual substitution artefacts.** v2 removes the context errors of v1 (true number left in place, dropped
+  commas, impossible dates, years after 2026, broken ranges and decades; counts in `factual_v2/v1_vs_v2.md`). What
+  remains is plausibility: a 3-digit year is scaled like a count ("934 to 961" can become "514 to 961"), a swap can
+  clash with other dates in the passage, and an unrelated equal number in the same passage is changed too (148
+  answers are a single digit). In a manual read of 30 random v2 questions, 26 were clean and plausible.
 - **Wording-based matching.** The true-answer checks match the answer's wording (plus a few derived forms in the
   highly relevant attack), so the same entity under a different name is not detected.
 
