@@ -28,7 +28,7 @@ clean_variant: clean_v1
 # either keep these names (changed passages are detected and re-embedded) or
 # add the new folder names here. No code changes are needed either way.
 variants:
-  - factual_v1
+  - factual_v2
   - contradiction_llm_full_v1
   - paraphrase_llm_full_v1
   - relevant_llm_full_v1
